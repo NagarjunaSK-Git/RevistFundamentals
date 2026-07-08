@@ -179,7 +179,7 @@ Exception in thread "main" java.lang.ArithmeticException: / by zero
 | Aspect | Checked Exception | Unchecked Exception |
 |---|---|---|
 | Compiler check | Compiler forces the programmer to handle it (`try-catch` or `throws`) | Compiler does **not** force handling |
-| Examples | `HallTicketMissingException`, `FileNotFoundException`, `IOException`, `SQLException` | `ArithmeticException`, `NullPointerException`, `ArrayIndexOutOfBoundsException` |
+| Examples | `FileNotFoundException`, `IOException`, `SQLException` | `ArithmeticException`, `NullPointerException`, `ArrayIndexOutOfBoundsException` |
 | Parent classes | `Exception` and its children (excluding `RuntimeException` tree) | `RuntimeException` and its children, `Error` and its children |
 
 > **Note:** Whether checked or unchecked, an exception can **only occur at runtime**. There is **no possibility of an exception occurring at compile time** — compile time errors are separate from exceptions.

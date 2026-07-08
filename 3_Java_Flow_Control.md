@@ -865,9 +865,20 @@ class Test {
 
 ## 11. Modern Java Enhancements to Flow Control (Beyond the Source Material — Java 5→21)
 
-The source PDF reflects Java 1.4/1.5-era exam content (SCJP/OCJP). For architect-level interviews in 2026, you are expected to also know the following evolutions:
+---
 
-### a) `String` in `switch` (Java 7)
+## 1. Why Switch Evolved
+
+Classic `switch` had four long-standing pain points:
+- **Fall-through was the default**, not opt-in — forgetting a `break` is one of the most common Java bugs.
+- **It couldn't produce a value directly** — you needed a mutable variable declared outside, assigned inside each branch.
+- **No exhaustiveness checking** — the compiler never forced you to handle every `enum` constant.
+- **Limited to discrete, flat values** — no way to branch on an object's type or shape without manual `instanceof` + casting.
+
+Switch **expressions** (Java 14) and **pattern matching for switch** (Java 21) address all four.
+
+## 2. `String` in `switch` (Java 7)
+
 ```java
 String day = "MON";
 switch (day) {
@@ -875,9 +886,37 @@ switch (day) {
     default: System.out.println("Other");
 }
 ```
-Internally the compiler desugars this to a `hashCode()`-based `tableswitch` + `equals()` verification (to handle collisions), **not** a direct string comparison at the bytecode level.
 
-### b) Switch Expressions & Arrow Syntax (Java 14, JEP 361)
+**Mechanics:** the compiler generates a jump table keyed on `day.hashCode()`, then calls `equals()` to confirm the match (protecting against hash collisions between different strings). So it's really a fast hash dispatch followed by a safety-net equality check — not a simple chain of `==` comparisons.
+
+## 3. Switch Expressions (Java 14, JEP 361)
+
+**Old way** — statement, mutable variable, `break` required on every branch:
+```java
+String result;
+switch (day) {
+    case "SAT":
+    case "SUN":
+        result = "Weekend";
+        break;
+    default:
+        result = "Weekday";
+}
+```
+
+**New way** — expression, assigns directly, no fall-through:
+```java
+String result = switch (day) {
+    case "SAT", "SUN" -> "Weekend";
+    default -> "Weekday";
+};
+```
+
+### Arrow arms don't fall through
+Each `->` arm executes only its own code, then exits the switch. No `break` needed — and none is allowed as a fall-through mechanism in arrow style.
+
+### Comma-separated labels
+Multiple case labels can share one arm, replacing the old "stacked colons" grouping idiom:
 ```java
 int numLetters = switch (day) {
     case MONDAY, FRIDAY, SUNDAY -> 6;
@@ -886,21 +925,54 @@ int numLetters = switch (day) {
     case WEDNESDAY             -> 9;
 };
 ```
-- No fall-through with `->` syntax (each arm is independent).
-- Can be used as an **expression** producing a value, assignable directly.
-- `yield` keyword returns a value from a `{}` block arm:
+
+### `yield` for multi-statement arms
+When an arm needs more than one expression, wrap it in `{ }` and use `yield` to supply the arm's value:
 ```java
 int result = switch (x) {
     case 1 -> 10;
     default -> {
         int temp = x * 2;
-        yield temp;
+        temp += 5;
+        yield temp;      // value contributed by this arm
     }
 };
 ```
-- Exhaustiveness is enforced by the compiler for `enum`/`sealed` switch expressions (no `default` needed if all cases are covered).
+**Gotcha:** using `return` here instead of `yield` would exit the *enclosing method*, not just the switch arm — a common and subtle bug when developers reach for `return` out of habit.
 
-### c) Pattern Matching for `switch` (Java 21, JEP 441 — finalized)
+### Can't mix colon and arrow styles
+A single switch block must be consistently one style or the other:
+```java
+switch (x) {
+    case 1: System.out.println("one"); break;
+    case 2 -> System.out.println("two");   // COMPILE ERROR — mixed styles
+}
+```
+
+### Exhaustiveness checking
+For `enum`/`sealed` targets, if every possible value is explicitly covered, `default` becomes optional:
+```java
+enum Day { MON, TUE, WED, THU, FRI, SAT, SUN }
+
+String type = switch (day) {
+    case SAT, SUN -> "Weekend";
+    case MON, TUE, WED, THU, FRI -> "Weekday";
+};
+```
+If a new constant (say `HOLIDAY`) is added to `Day` later, this switch expression **fails to compile** until updated — turning a silent runtime gap into a guaranteed compile-time signal across the whole codebase.
+
+### Independent scope per arm
+Unlike a traditional switch (where all `case` blocks share one scope), each arrow arm has its own scope — identical variable names in different arms don't conflict:
+```java
+int result = switch (x) {
+    case 1 -> { int temp = 100; yield temp; }
+    case 2 -> { int temp = 200; yield temp; }  // no conflict, separate scope
+    default -> 0;
+};
+```
+
+## 4. Pattern Matching for `switch` (Java 21, JEP 441)
+
 ```java
 static String describe(Object obj) {
     return switch (obj) {
@@ -912,8 +984,13 @@ static String describe(Object obj) {
     };
 }
 ```
-- `switch` can now match on **type patterns**, use **guarded patterns** (`when` clause), and explicitly handle `case null`.
-- Works beautifully with **records** for deconstruction patterns:
+
+- **Type patterns** (`Integer i`, `String s`) bind a new local variable of the matched type, scoped to that arm only — no manual cast required.
+- **`when` guards** attach a boolean condition to a type pattern. Patterns are checked top to bottom, so a guarded pattern (`Integer i when i > 0`) must come *before* a broader unguarded one of the same type, or the broader one always wins first and the guarded arm becomes unreachable (compile error).
+- **`case null`** lets you handle a null subject explicitly. Without it, switching on `null` still throws `NullPointerException`, exactly as classic switch always did — pattern matching doesn't silently fold `null` into `default` unless you write `case null, default ->`.
+
+### Record deconstruction
+Records can be deconstructed right in the case label, binding their components in one step:
 ```java
 record Point(int x, int y) {}
 
@@ -925,17 +1002,81 @@ static String locate(Object o) {
     };
 }
 ```
+This can nest for records containing other records, extracting deeply nested fields in a single pattern.
 
-### d) `instanceof` Pattern Matching (Java 16) — related flow-control simplification
+### Sealed types + exhaustiveness
+```java
+sealed interface Shape permits Circle, Square {}
+record Circle(double radius) implements Shape {}
+record Square(double side) implements Shape {}
+
+static double area(Shape s) {
+    return switch (s) {
+        case Circle c  -> Math.PI * c.radius() * c.radius();
+        case Square sq -> sq.side() * sq.side();
+        // no default needed — Circle and Square are the only permitted subtypes
+    };
+}
+```
+Add a new shape to the `permits` clause later, and every exhaustive switch over `Shape` fails to compile until it's handled — a strong argument for pairing `sealed` hierarchies with pattern-matching switches in domain modeling.
+
+## 5. Related: `instanceof` Pattern Matching (Java 16)
+
 ```java
 if (obj instanceof String s && s.length() > 5) {
     System.out.println(s.toUpperCase());
 }
 ```
-Eliminates the old cast-after-check idiom, and the compiler tracks *definite assignment/flow scoping* of `s` based on the `if`/`&&` structure — an interesting compiler-flow-analysis topic in its own right.
+This eliminates the old check-then-cast idiom. The compiler even does flow-sensitive scoping: if you write a negated guard that returns early, `s` stays in scope and definitely assigned afterward:
+```java
+if (!(obj instanceof String s)) {
+    return;
+}
+System.out.println(s.toUpperCase());   // 's' still usable here
+```
 
-### e) Enhanced `for` + Streams as an Architectural Alternative
-While `for-each` remains foundational, architects should be ready to discuss **when to prefer the Streams API** (`collection.stream().filter(...).forEach(...)`) over imperative loops — for readability, composability, and (with `.parallelStream()`) potential parallel execution, versus the raw performance/predictability/debuggability advantages of classic loops.
+## 6. Streams as an Alternative to Loops (Java 8+)
+
+```java
+list.stream()
+    .filter(x -> x > 0)
+    .map(x -> x * 2)
+    .forEach(System.out::println);
+```
+Streams give declarative, composable pipelines and easy parallelism via `.parallelStream()`. Classic loops still win for performance-critical hot paths, complex multi-exit control flow, or labeled breaks/continues — streams support none of those directly.
+
+## 7. Quick Comparison
+
+| Feature | Switch Statement | Switch Expression (14+) |
+|---|---|---|
+| Produces a value | No | Yes |
+| Fall-through | Yes (colon style) | No (arrow style) |
+| Multi-label arm | Stacked colons | Comma-separated |
+| Value from a block | N/A | `yield` |
+| Exhaustiveness | Never enforced | Enforced for enum/sealed |
+| Scope across arms | Shared | Independent (arrow style) |
+
+## 8. Evolution Timeline
+
+| Version | Feature |
+|---|---|
+| ≤1.4 | `switch` on byte/short/char/int only |
+| 5 | Wrapper classes (autoboxing) + `enum` |
+| 7 | `String` in `switch` |
+| 14 | Switch expressions, arrow syntax, `yield` |
+| 16 | `instanceof` pattern matching |
+| 21 | Pattern matching for switch, record patterns finalized |
+
+## 9. Top Pitfalls
+
+1. **`return` instead of `yield`** in a block arm — exits the method, not just the switch.
+2. **Unnecessary `default`** on an exhaustive enum/sealed switch — quietly defeats the future compile-time safety net when a new case is added.
+3. **Guarded pattern placed after** a broader unguarded one of the same type — unreachable code, compile error.
+4. **Assuming `case null` is implicit** — it isn't; omitting it still throws NPE on a null subject.
+5. **Mixing colon and arrow styles** in one switch block — not allowed.
+
+---
+*Companion to the original "Core Java — Flow Control" material. Original document unmodified.*
 
 ---
 

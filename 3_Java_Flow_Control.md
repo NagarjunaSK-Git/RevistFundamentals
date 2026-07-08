@@ -157,7 +157,8 @@ switch (x) {
 ### Structural Rules
 - **Curly braces `{}` are mandatory** for switch (unlike `if`/loops where they're optional).
 - Both `case` and `default` are **optional**.
-```switch (x) {
+```java
+switch (x) {
     // no cases, no default
 }
 ```
